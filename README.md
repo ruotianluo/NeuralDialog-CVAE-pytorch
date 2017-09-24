@@ -1,11 +1,12 @@
 # Knowledge-Guided CVAE for dialog generation
 
-We provide a TensorFlow implementation of the CVAE-based dialog model described in
+It is a PyTorch implementation of the CVAE-based dialog model described in
 **Learning Discourse-level Diversity for Neural Dialog Models using Conditional Variational Autoencoders**, accepted as a long paper in ACL 2017.
-See the [paper](https://arxiv.org/abs/1703.10960) for more details.
+See the [paper](https://arxiv.org/abs/1703.10960) for more details. This project is modified from original tensorflow implementation [snakeztc/NeuralDialog-CVAE](https://github.com/snakeztc/NeuralDialog-CVAE]
 
 # Prerequisites
- - TensorFlow 0.12.1+
+ - TensorFlow 0.12.1+ (for tf.flag and tf.name_scope)
+ - PyTorch 0.2
  - Python 2.7
  - Numpy
  - NLTK
