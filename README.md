@@ -2,7 +2,7 @@
 
 It is a PyTorch implementation of the CVAE-based dialog model described in
 **Learning Discourse-level Diversity for Neural Dialog Models using Conditional Variational Autoencoders**, accepted as a long paper in ACL 2017.
-See the [paper](https://arxiv.org/abs/1703.10960) for more details. This project is modified from original tensorflow implementation [snakeztc/NeuralDialog-CVAE](https://github.com/snakeztc/NeuralDialog-CVAE]
+See the [paper](https://arxiv.org/abs/1703.10960) for more details. This project is modified from original tensorflow implementation [snakeztc/NeuralDialog-CVAE](https://github.com/snakeztc/NeuralDialog-CVAE)
 
 # Prerequisites
  - TensorFlow 0.12.1+ (for tf.flag and tf.name_scope)
