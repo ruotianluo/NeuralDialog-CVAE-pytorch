@@ -10,7 +10,6 @@ import tensorflow as tf
 import torch
 import torch.nn
 import torch.nn.functional as F
-from torch.autograd import Variable
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from .utils import dynamic_rnn
@@ -60,9 +59,9 @@ def inference_loop(cell, output_fn, embeddings,
     for time in range(maximum_length + 1):
         if cell_output is None:
             # invariant that this is time == 0
-            next_input_id = Variable(encoder_state.data.new(batch_size).long().fill_(start_of_sequence_id))
+            next_input_id = encoder_state.new_full((batch_size,), start_of_sequence_id, dtype=torch.long)
             # done: indicate which sentences reaches eos. used for early stopping
-            done = encoder_state.data.new(batch_size).zero_().byte()
+            done = encoder_state.new_zeros(batch_size, dtype=torch.uint8)
             cell_state = encoder_state
         else:
             cell_output = output_fn(cell_output)
@@ -70,15 +69,15 @@ def inference_loop(cell, output_fn, embeddings,
         
             if decode_type == 'sample':
                 matrix_U = -1.0 * torch.log(
-                    -1.0 * torch.log(cell_output.data.new(cell_output.size()).uniform_()))
+                    -1.0 * torch.log(cell_output.new_empty(cell_output.size()).uniform_()))
                 next_input_id = torch.max(cell_output - matrix_U, 1)[1]
             elif decode_type == 'greedy':
                 next_input_id = torch.max(cell_output, 1)[1]
             else:
                 raise ValueError("unknown decode type")
 
-            next_input_id = next_input_id * Variable((~done).long()) # make sure the next_input_id to be 0 if done
-            done = (next_input_id == end_of_sequence_id).data | done
+            next_input_id = next_input_id * (~done).long() # make sure the next_input_id to be 0 if done
+            done = (next_input_id == end_of_sequence_id) | done
             # save the decoding results into context state
             context_state.append(next_input_id)
 
@@ -93,7 +92,7 @@ def inference_loop(cell, output_fn, embeddings,
         cell_output = cell_output.squeeze(1)
 
         # zero out done sequences
-        cell_output = cell_output * Variable((~done).float()).unsqueeze(1)
+        cell_output = cell_output * (~done).float().unsqueeze(1)
 
     return torch.cat([_.unsqueeze(1) for _ in outputs], 1), cell_state, torch.cat([_.unsqueeze(1) for _ in context_state], 1)
   

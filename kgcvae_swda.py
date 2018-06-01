@@ -88,7 +88,7 @@ def main():
 
         ckpt = get_checkpoint_state(ckp_dir)
         print("Created models with fresh parameters.")
-        model.apply(lambda m: [torch.nn.init.uniform(p.data, -1.0 * config.init_w, config.init_w) for p in m.parameters()])
+        model.apply(lambda m: [torch.nn.init.uniform_(p.data, -1.0 * config.init_w, config.init_w) for p in m.parameters()])
 
         # Load word2vec weight
         if api.word2vec is not None and not FLAGS.forward_only:

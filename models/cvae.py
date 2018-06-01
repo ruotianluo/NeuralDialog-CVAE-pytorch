@@ -12,7 +12,6 @@ from tensorflow.python.ops import variable_scope
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.autograd import Variable
 import torch.nn.functional as F
 
 from . import decoder_fn_lib
@@ -104,7 +103,7 @@ class BaseTFModel(nn.Module):
         loss.backward()
     
         if self.grad_clip is not None:
-            torch.nn.utils.clip_grad_norm(self.parameters(), self.grad_clip)
+            torch.nn.utils.clip_grad_norm_(self.parameters(), self.grad_clip)
         # add gradient noise
         if self.grad_noise > 0:
             grad_std = (self.grad_noise / (1.0 + self.global_t) ** 0.55) ** 0.5
@@ -270,8 +269,8 @@ class KgRnnCVAE(BaseTFModel):
             # print((self.input_contexts.view(-1, self.max_utt_len) > 0)[:10])
             # print((torch.max(torch.abs(input_embedding), 2)[0] > 0)[:10])
             #print(self.embedding.weight.data[1:2])
-            assert ((self.input_contexts.view(-1, self.max_utt_len) > 0).float() - (torch.max(torch.abs(input_embedding), 2)[0] > 0).float()).abs().sum().data[0] == 0,\
-                str(((self.input_contexts.view(-1, self.max_utt_len) > 0).float() - (torch.max(torch.abs(input_embedding), 2)[0] > 0).float()).abs().sum().data[0])
+            assert ((self.input_contexts.view(-1, self.max_utt_len) > 0).float() - (torch.max(torch.abs(input_embedding), 2)[0] > 0).float()).abs().sum().item() == 0,\
+                str(((self.input_contexts.view(-1, self.max_utt_len) > 0).float() - (torch.max(torch.abs(input_embedding), 2)[0] > 0).float()).abs().sum().item())
 
             if self.sent_type == "bow":
                 input_embedding, sent_size = get_bow(input_embedding)
@@ -293,15 +292,15 @@ class KgRnnCVAE(BaseTFModel):
                 input_embedding = F.dropout(input_embedding, 1 - self.keep_prob, self.training)
 
             # convert floors into 1 hot
-            floor_one_hot = Variable(torch.cuda.FloatTensor(self.floors.numel(), 2))
-            floor_one_hot.data.scatter_(1, self.floors.data.view(-1,1), 1)
+            floor_one_hot = self.floors.new_zeros((self.floors.numel(), 2), dtype=torch.float)
+            floor_one_hot.data.scatter_(1, self.floors.view(-1,1), 1)
             floor_one_hot = floor_one_hot.view(-1, max_dialog_len, 2)
 
             joint_embedding = torch.cat([input_embedding, floor_one_hot], 2)
 
         with variable_scope.variable_scope("contextRNN"):
             # and enc_last_state will be same as the true last state
-            self.enc_cell.eval()
+            # self.enc_cell.eval()
             _, enc_last_state = utils.dynamic_rnn(
                 self.enc_cell,
                 joint_embedding,
@@ -310,7 +309,7 @@ class KgRnnCVAE(BaseTFModel):
             #     self.enc_cell,
             #     joint_embedding,
             #     sequence_length=self.context_lens)
-            self.enc_cell.train()
+            # self.enc_cell.train()
 
             # print((_-__).abs().sum())
             # print((enc_last_state-enc_last_state_).abs().sum())
@@ -356,7 +355,7 @@ class KgRnnCVAE(BaseTFModel):
             # Y loss
             if self.use_hcf:
                 self.da_logits = self.da_project(gen_inputs)
-                da_prob = F.softmax(self.da_logits)
+                da_prob = F.softmax(self.da_logits, dim=1)
                 pred_attribute_embedding = torch.matmul(da_prob, self.d_embedding.weight)
                 if mode == 'test':
                     selected_attribute_embedding = pred_attribute_embedding
@@ -364,7 +363,7 @@ class KgRnnCVAE(BaseTFModel):
                     selected_attribute_embedding = attribute_embedding
                 dec_inputs = torch.cat([gen_inputs, selected_attribute_embedding], 1)
             else:
-                self.da_logits = Variable(gen_inputs.data.new(batch_size, self.da_vocab_size).zero_())
+                self.da_logits = gen_inputs.new_zeros(batch_size, self.da_vocab_size)
                 dec_inputs = gen_inputs
 
             # Decoder
@@ -399,7 +398,7 @@ class KgRnnCVAE(BaseTFModel):
                 input_tokens = self.output_tokens[:, :-1]
                 if self.dec_keep_prob < 1.0:
                     # if token is 0, then embedding is 0, it's the same as word drop
-                    keep_mask = Variable(input_tokens.data.new(input_tokens.size()).bernoulli_(config.dec_keep_prob))
+                    keep_mask = input_tokens.new_empty(input_tokens.size()).bernoulli_(config.dec_keep_prob)
                     input_tokens = input_tokens * keep_mask
 
                 dec_input_embedding = self.embedding(input_tokens)
@@ -423,10 +422,10 @@ class KgRnnCVAE(BaseTFModel):
         if not mode == 'test':
             with variable_scope.variable_scope("loss"):
                 labels = self.output_tokens[:, 1:]
-                label_mask = torch.sign(labels).float()
+                label_mask = torch.sign(labels).detach().float()
 
                 # rc_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=dec_outs, labels=labels)
-                rc_loss = -F.log_softmax(dec_outs.view(-1, dec_outs.size(-1))).view_as(dec_outs).gather(2, labels.unsqueeze(2)).squeeze(2)
+                rc_loss = F.cross_entropy(dec_outs.view(-1, dec_outs.size(-1)), labels.reshape(-1), reduce=False).view(dec_outs.size()[:-1])
                 # print(rc_loss * label_mask)
                 rc_loss = torch.sum(rc_loss * label_mask, 1)
                 self.avg_rc_loss = rc_loss.mean()
@@ -435,7 +434,7 @@ class KgRnnCVAE(BaseTFModel):
 
                 """ as n-trial multimodal distribution. """
                 # bow_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=tile_bow_logits, labels=labels) * label_mask
-                bow_loss = -F.log_softmax(self.bow_logits).gather(1, labels) * label_mask
+                bow_loss = -F.log_softmax(self.bow_logits, dim=1).gather(1, labels) * label_mask
                 bow_loss = torch.sum(bow_loss, 1)
                 self.avg_bow_loss  = torch.mean(bow_loss)
 
@@ -443,7 +442,7 @@ class KgRnnCVAE(BaseTFModel):
                 if self.use_hcf:
                     self.avg_da_loss = F.cross_entropy(self.da_logits, self.output_das)
                 else:
-                    self.avg_da_loss = Variable(self.avg_bow_loss.data.new(1).zero_())
+                    self.avg_da_loss = self.avg_bow_loss.new_tensor(0)
 
                 # print(recog_mu.sum(), recog_logvar.sum(), prior_mu.sum(), prior_logvar.sum())
                 kld = gaussian_kld(recog_mu, recog_logvar, prior_mu, prior_logvar)
@@ -458,17 +457,17 @@ class KgRnnCVAE(BaseTFModel):
                 self.aug_elbo = self.avg_bow_loss + self.avg_da_loss + self.elbo
 
                 self.summary_op = [\
-                    tb.summary.scalar("model/loss/da_loss", self.avg_da_loss.data[0]),
-                    tb.summary.scalar("model/loss/rc_loss", self.avg_rc_loss.data[0]),
-                    tb.summary.scalar("model/loss/elbo", self.elbo.data[0]),
-                    tb.summary.scalar("model/loss/kld", self.avg_kld.data[0]),
-                    tb.summary.scalar("model/loss/bow_loss", self.avg_bow_loss.data[0])]
+                    tb.summary.scalar("model/loss/da_loss", self.avg_da_loss.item()),
+                    tb.summary.scalar("model/loss/rc_loss", self.avg_rc_loss.item()),
+                    tb.summary.scalar("model/loss/elbo", self.elbo.item()),
+                    tb.summary.scalar("model/loss/kld", self.avg_kld.item()),
+                    tb.summary.scalar("model/loss/bow_loss", self.avg_bow_loss.item())]
 
                 self.log_p_z = norm_log_liklihood(latent_sample, prior_mu, prior_logvar)
                 self.log_q_z_xy = norm_log_liklihood(latent_sample, recog_mu, recog_logvar)
                 self.est_marginal = torch.mean(rc_loss + bow_loss - self.log_p_z + self.log_q_z_xy)
 
-    def batch_2_feed(self, batch, global_t, use_prior, repeat=1, volatile=False):
+    def batch_2_feed(self, batch, global_t, use_prior, repeat=1):
         context, context_lens, floors, topics, my_profiles, ot_profiles, outputs, output_lens, output_das = batch
         feed_dict = {"input_contexts": context, "context_lens":context_lens,
                      "floors": floors, "topics":topics, "my_profile": my_profiles,
@@ -489,7 +488,7 @@ class KgRnnCVAE(BaseTFModel):
         if global_t is not None:
             feed_dict["global_t"] = global_t
 
-        feed_dict = {k: Variable(torch.from_numpy(v).cuda(), volatile=volatile) if isinstance(v, np.ndarray) else v for k, v in feed_dict.items()}
+        feed_dict = {k: torch.from_numpy(v).cuda() if isinstance(v, np.ndarray) else v for k, v in feed_dict.items()}
 
         return feed_dict
 
@@ -508,13 +507,13 @@ class KgRnnCVAE(BaseTFModel):
                 break
             if update_limit is not None and local_t >= update_limit:
                 break
-            feed_dict = self.batch_2_feed(batch, global_t, use_prior=False, volatile=False)
+            feed_dict = self.batch_2_feed(batch, global_t, use_prior=False)
             self.forward(feed_dict, mode='train')
-            elbo_loss, bow_loss, rc_loss, rc_ppl, kl_loss = self.elbo.data[0],\
-                                                            self.avg_bow_loss.data[0],\
-                                                            self.avg_rc_loss.data[0],\
-                                                            self.rc_ppl.data[0],\
-                                                            self.avg_kld.data[0]
+            elbo_loss, bow_loss, rc_loss, rc_ppl, kl_loss = self.elbo.item(),\
+                                                            self.avg_bow_loss.item(),\
+                                                            self.avg_rc_loss.item(),\
+                                                            self.rc_ppl.item(),\
+                                                            self.avg_kld.item()
 
             self.optimize(self.aug_elbo)
             # print(elbo_loss, bow_loss, rc_loss, rc_ppl, kl_loss)
@@ -553,14 +552,14 @@ class KgRnnCVAE(BaseTFModel):
             batch = valid_feed.next_batch()
             if batch is None:
                 break
-            feed_dict = self.batch_2_feed(batch, None, use_prior=False, repeat=1, volatile=True)
-
-            self.forward(feed_dict, mode='valid')
-            elbo_loss, bow_loss, rc_loss, rc_ppl, kl_loss = self.elbo.data[0],\
-                                                            self.avg_bow_loss.data[0],\
-                                                            self.avg_rc_loss.data[0],\
-                                                            self.rc_ppl.data[0],\
-                                                            self.avg_kld.data[0]
+            feed_dict = self.batch_2_feed(batch, None, use_prior=False, repeat=1)
+            with torch.no_grad():
+                self.forward(feed_dict, mode='valid')
+            elbo_loss, bow_loss, rc_loss, rc_ppl, kl_loss = self.elbo.item(),\
+                                                            self.avg_bow_loss.item(),\
+                                                            self.avg_rc_loss.item(),\
+                                                            self.rc_ppl.item(),\
+                                                            self.avg_kld.item()
             elbo_losses.append(elbo_loss)
             rc_losses.append(rc_loss)
             rc_ppls.append(rc_ppl)
@@ -580,19 +579,19 @@ class KgRnnCVAE(BaseTFModel):
             batch = test_feed.next_batch()
             if batch is None or (num_batch is not None and local_t > num_batch):
                 break
-            # make volatile
-            feed_dict = self.batch_2_feed(batch, None, use_prior=True, repeat=repeat, volatile=True)
-            self.forward(feed_dict, mode='test')
-            word_outs, da_logits = self.dec_out_words.data.cpu().numpy(), self.da_logits.data.cpu().numpy()
+            feed_dict = self.batch_2_feed(batch, None, use_prior=True, repeat=repeat)
+            with torch.no_grad():
+                self.forward(feed_dict, mode='test')
+            word_outs, da_logits = self.dec_out_words.cpu().numpy(), self.da_logits.cpu().numpy()
             sample_words = np.split(word_outs, repeat, axis=0)
             sample_das = np.split(da_logits, repeat, axis=0)
 
-            true_floor = feed_dict["floors"].data.cpu().numpy()
-            true_srcs = feed_dict["input_contexts"].data.cpu().numpy()
-            true_src_lens = feed_dict["context_lens"].data.cpu().numpy()
-            true_outs = feed_dict["output_tokens"].data.cpu().numpy()
-            true_topics = feed_dict["topics"].data.cpu().numpy()
-            true_das = feed_dict["output_das"].data.cpu().numpy()
+            true_floor = feed_dict["floors"].cpu().numpy()
+            true_srcs = feed_dict["input_contexts"].cpu().numpy()
+            true_src_lens = feed_dict["context_lens"].cpu().numpy()
+            true_outs = feed_dict["output_tokens"].cpu().numpy()
+            true_topics = feed_dict["topics"].cpu().numpy()
+            true_das = feed_dict["output_das"].cpu().numpy()
             local_t += 1
 
             if dest != sys.stdout:

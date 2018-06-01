@@ -6,7 +6,7 @@ See the [paper](https://arxiv.org/abs/1703.10960) for more details. This project
 
 # Prerequisites
  - TensorFlow 0.12.1+ (for tf.flag and tf.name_scope)
- - PyTorch 0.2
+ - PyTorch 0.4
  - Python 2.7
  - Numpy
  - NLTK

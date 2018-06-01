@@ -11,7 +11,6 @@ from nltk.translate.bleu_score import SmoothingFunction
 import torch
 import torch.nn
 import torch.nn.functional as F
-from torch.autograd import Variable
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 
@@ -38,7 +37,7 @@ def norm_log_liklihood(x, mu, logvar):
 
 
 def sample_gaussian(mu, logvar):
-    epsilon = Variable(logvar.data.new(logvar.size()).normal_())
+    epsilon = logvar.new_empty(logvar.size()).normal_()
     std = torch.exp(0.5 * logvar)
     z= mu + std * epsilon
     return z
@@ -60,18 +59,18 @@ def dynamic_rnn(cell, inputs, sequence_length, init_state=None, output_fn=None):
 
     # Used for later reorder
     inv_ix = len_ix.clone()
-    inv_ix.data[len_ix.data] = torch.arange(0, len(len_ix)).type_as(inv_ix.data)
+    inv_ix[len_ix] = torch.arange(0, len(len_ix)).type_as(inv_ix)
 
     # The number of inputs that have lengths > 0
-    valid_num = torch.sign(sorted_lens).long().sum().data[0]
+    valid_num = torch.sign(sorted_lens).long().sum().item()
     zero_num = inputs.size(0) - valid_num
     # print('zero_num:', zero_num)
 
     sorted_inputs = inputs[len_ix].contiguous()
     if init_state is not None:
-        sorted_init_state = init_state[:, len_ix.data].contiguous()
+        sorted_init_state = init_state[:, len_ix].contiguous()
     
-    packed_inputs = pack_padded_sequence(sorted_inputs[:valid_num], list(sorted_lens.data[:valid_num]), batch_first=True)
+    packed_inputs = pack_padded_sequence(sorted_inputs[:valid_num], list(sorted_lens[:valid_num]), batch_first=True)
 
     if init_state is not None:
         outputs, state = cell(packed_inputs, sorted_init_state[:, :valid_num])
@@ -83,15 +82,15 @@ def dynamic_rnn(cell, inputs, sequence_length, init_state=None, output_fn=None):
 
     # Add back the zero lengths
     if zero_num > 0:
-        outputs = torch.cat([outputs, Variable(outputs.data.new(zero_num, outputs.size(1), outputs.size(2)).zero_())], 0)
+        outputs = torch.cat([outputs, outputs.new_zeros(zero_num, outputs.size(1), outputs.size(2))], 0)
         if init_state is not None:
             state = torch.cat([state, sorted_init_state[:, valid_num:]], 1)
         else:
-            state = torch.cat([state, Variable(state.data.new(state.size(0), zero_num, state.size(2)).zero_())], 1)
+            state = torch.cat([state, state.new_zeros(state.size(0), zero_num, state.size(2))], 1)
 
     # Reorder to the original order
     outputs = outputs[inv_ix].contiguous()
-    state = state[:, inv_ix.data].contiguous()
+    state = state[:, inv_ix].contiguous()
 
     # compensate the last last layer dropout, necessary????????? need to check!!!!!!!!
     state = F.dropout(state, cell.dropout, cell.training)
