@@ -21,9 +21,9 @@ import re
 from . import utils
 from .utils import sample_gaussian, gaussian_kld, norm_log_liklihood, get_bow, get_rnn_encode, get_bi_rnn_encode
 
-import tensorboard as tb
-import tensorboard.summary
-import tensorboard.writer
+import tensorboardX as tb
+import tensorboardX.summary
+import tensorboardX.writer
 
 class BaseTFModel(nn.Module):
     global_t = tf.placeholder(dtype=tf.int32, name="global_t")
